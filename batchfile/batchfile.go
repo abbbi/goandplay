@@ -13,6 +13,7 @@ type copyResult struct {
 	file   string
 	result bool
 	bytes  int64
+	target string
 }
 
 type resultList struct {
@@ -22,21 +23,24 @@ type resultList struct {
 func worker(id string, results chan<- copyResult) {
 	source, err := os.Open(id)
 	if err != nil {
-		results <- copyResult{id, false, 0}
+		results <- copyResult{id, false, 0, ""}
+		return
 	}
 	defer source.Close()
 
 	tmpfile, _ := ioutil.TempFile("", "abitest")
 	destination, err := os.Create(tmpfile.Name())
 	if err != nil {
-		results <- copyResult{id, false, 0}
+		results <- copyResult{id, false, 0, ""}
+		return
 	}
 	defer destination.Close()
 	nBytes, err := io.Copy(destination, source)
 	if err != nil {
-		results <- copyResult{id, false, 0}
+		results <- copyResult{id, false, 0, ""}
+		return
 	}
-	results <- copyResult{id, true, nBytes}
+	results <- copyResult{id, true, nBytes, tmpfile.Name()}
 }
 
 func main() {
@@ -81,7 +85,7 @@ func main() {
 	log.Printf("Processed %d files:", len(allResults.Items))
 	for _, f := range allResults.Items {
 		if f.result == true {
-			log.Printf("OK: %s", f.file)
+			log.Printf("OK: %s -> %s (%d)", f.file, f.target, f.bytes)
 		} else {
 			log.Printf("NOK: %s", f.file)
 		}
