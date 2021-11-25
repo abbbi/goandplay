@@ -9,29 +9,34 @@ import (
 	"os"
 )
 
-func worker(id string, results chan<- string) {
-	log.Println("file:", id, "started  job")
+type copyResult struct {
+	file   string
+	result bool
+	bytes  int64
+}
 
+type resultList struct {
+	Items []copyResult
+}
+
+func worker(id string, results chan<- copyResult) {
 	source, err := os.Open(id)
 	if err != nil {
-		log.Printf("error")
+		results <- copyResult{id, false, 0}
 	}
 	defer source.Close()
 
 	tmpfile, _ := ioutil.TempFile("", "abitest")
 	destination, err := os.Create(tmpfile.Name())
 	if err != nil {
-		log.Println("err")
+		results <- copyResult{id, false, 0}
 	}
 	defer destination.Close()
 	nBytes, err := io.Copy(destination, source)
 	if err != nil {
-		log.Println("err")
+		results <- copyResult{id, false, 0}
 	}
-	log.Println(nBytes)
-
-	log.Println("file", id, "finished job")
-	results <- id
+	results <- copyResult{id, true, nBytes}
 }
 
 func main() {
@@ -52,6 +57,7 @@ func main() {
 		maxJobs = len(files)
 	}
 
+	allResults := resultList{}
 	for i := 0; i < len(files); i += maxJobs {
 		j := i + maxJobs
 		if j > len(files) {
@@ -60,7 +66,7 @@ func main() {
 		batch := files[i:j]
 		log.Println("Starting", len(batch), "jobs")
 
-		results := make(chan string, len(batch))
+		results := make(chan copyResult, len(batch))
 
 		for _, file := range batch {
 			fp := fmt.Sprintf("%s/%s", Dir, file.Name())
@@ -68,8 +74,16 @@ func main() {
 		}
 
 		for range batch {
-			foo := <-results
-			log.Printf("Done: %s", foo)
+			allResults.Items = append(allResults.Items, <-results)
+		}
+	}
+
+	log.Printf("Processed %d files:", len(allResults.Items))
+	for _, f := range allResults.Items {
+		if f.result == true {
+			log.Printf("OK: %s", f.file)
+		} else {
+			log.Printf("NOK: %s", f.file)
 		}
 	}
 }
