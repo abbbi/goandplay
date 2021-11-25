@@ -1,48 +1,52 @@
 package main
 
 import (
+	"flag"
 	"fmt"
 	"io"
 	"io/ioutil"
+	"log"
 	"os"
 )
 
 func worker(id string, results chan<- string) {
-	fmt.Println("file:", id, "started  job")
+	log.Println("file:", id, "started  job")
 
 	source, err := os.Open(id)
 	if err != nil {
-		fmt.Printf("error")
+		log.Printf("error")
 	}
 	defer source.Close()
 
 	tmpfile, _ := ioutil.TempFile("", "abitest")
 	destination, err := os.Create(tmpfile.Name())
 	if err != nil {
-		fmt.Println("err")
+		log.Println("err")
 	}
 	defer destination.Close()
 	nBytes, err := io.Copy(destination, source)
 	if err != nil {
-		fmt.Println("err")
+		log.Println("err")
 	}
-	fmt.Println(nBytes)
+	log.Println(nBytes)
 
-	fmt.Println("file", id, "finished job")
+	log.Println("file", id, "finished job")
 	results <- id
 }
 
 func main() {
 	var (
 		maxJobs int = 5
+		Dir     string
 	)
-	files := [...]string{
-		"testfile1",
-		"testfile2",
-		"testfile3",
-		"testfile4",
-		"testfile5",
-		"testfile6",
+
+	flag.StringVar(&Dir, "dir", "/tmp/testdir", "Directory")
+
+	flag.Parse()
+
+	files, err := ioutil.ReadDir(Dir)
+	if err != nil {
+		log.Fatal(err)
 	}
 	if len(files) < maxJobs {
 		maxJobs = len(files)
@@ -54,24 +58,18 @@ func main() {
 			j = len(files)
 		}
 		batch := files[i:j]
-		fmt.Println("Batch:", batch)
-		fmt.Println("Starting", len(batch), "jobs")
+		log.Println("Starting", len(batch), "jobs")
 
-		jobs := make(chan string, len(batch))
 		results := make(chan string, len(batch))
 
 		for _, file := range batch {
-			go worker(file, results)
+			fp := fmt.Sprintf("%s/%s", Dir, file.Name())
+			go worker(fp, results)
 		}
-
-		for _, file := range batch {
-			jobs <- file
-		}
-		close(jobs)
 
 		for range batch {
-			<-results
+			foo := <-results
+			log.Printf("Done: %s", foo)
 		}
-
 	}
 }
