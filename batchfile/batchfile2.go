@@ -106,14 +106,6 @@ func main() {
 
 	flag.Parse()
 
-	files, err := ioutil.ReadDir(Dir)
-	if err != nil {
-		log.Fatal(err)
-	}
-	if len(files) < maxJobs {
-		maxJobs = len(files)
-	}
-
 	walker := walker()
 	processed := worker(maxJobs, walker)
 
