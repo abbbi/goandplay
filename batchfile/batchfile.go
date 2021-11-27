@@ -1,12 +1,14 @@
 package main
 
 import (
+	"crypto/md5"
+	"encoding/hex"
 	"flag"
-	"fmt"
 	"io"
-	"io/ioutil"
 	"log"
 	"os"
+	"path/filepath"
+	"sync"
 )
 
 type copyResult struct {
@@ -20,74 +22,89 @@ type resultList struct {
 	Items []copyResult
 }
 
-func worker(id string, results chan<- copyResult) {
-	source, err := os.Open(id)
-	if err != nil {
-		results <- copyResult{id, false, 0, ""}
-		return
-	}
-	defer source.Close()
+type fileResult struct {
+	file string
+}
 
-	tmpfile, _ := ioutil.TempFile("", "abitest")
-	destination, err := os.Create(tmpfile.Name())
+func md5sum(filePath string) (string, error) {
+	file, err := os.Open(filePath)
 	if err != nil {
-		results <- copyResult{id, false, 0, ""}
-		return
+		return "", err
 	}
-	defer destination.Close()
-	nBytes, err := io.Copy(destination, source)
-	if err != nil {
-		results <- copyResult{id, false, 0, ""}
-		return
+	defer file.Close()
+
+	hash := md5.New()
+	if _, err := io.Copy(hash, file); err != nil {
+		return "", err
 	}
-	results <- copyResult{id, true, nBytes, tmpfile.Name()}
+	return hex.EncodeToString(hash.Sum(nil)), nil
+}
+
+func worker(concurrency int, filename <-chan string) <-chan string {
+	log.Println("started worker")
+	var wg sync.WaitGroup
+	wg.Add(1)
+	out := make(chan string, concurrency)
+	go func() {
+		limiter := make(chan bool, concurrency)
+		for i := 0; i < concurrency; i++ {
+			limiter <- true
+		}
+
+		for i := 0; i < concurrency; i++ {
+			<-limiter
+			path := <-filename
+			log.Println(path)
+			go md5sum(path)
+			limiter <- true
+		}
+		wg.Done()
+	}()
+	go func() {
+		wg.Wait()
+		close(out)
+	}()
+	return out
+}
+
+func walker(Dir string, maxJobs int) <-chan string {
+	out := make(chan string, maxJobs)
+	log.Println("walker")
+
+	go func() {
+		err := filepath.Walk(Dir,
+			func(path string, info os.FileInfo, err error) error {
+				if err != nil {
+					return err
+				}
+				log.Println(path)
+				out <- path
+				return nil
+			})
+		if err != nil {
+			close(out)
+			log.Println(err)
+		}
+		close(out)
+	}()
+	return out
 }
 
 func main() {
 	var (
-		maxJobs int = 5
+		maxJobs int
 		Dir     string
 	)
 
 	flag.StringVar(&Dir, "dir", "/tmp/testdir", "Directory")
+	flag.IntVar(&maxJobs, "jobs", 5, "Directory")
 
 	flag.Parse()
 
-	files, err := ioutil.ReadDir(Dir)
-	if err != nil {
-		log.Fatal(err)
-	}
-	if len(files) < maxJobs {
-		maxJobs = len(files)
+	walker := walker(Dir, maxJobs)
+	processed := worker(maxJobs, walker)
+
+	for range processed {
 	}
 
-	allResults := resultList{}
-	for i := 0; i < len(files); i += maxJobs {
-		j := i + maxJobs
-		if j > len(files) {
-			j = len(files)
-		}
-		batch := files[i:j]
-		log.Println("Starting", len(batch), "jobs")
-
-		results := make(chan copyResult, len(batch))
-
-		for _, file := range batch {
-			fp := fmt.Sprintf("%s/%s", Dir, file.Name())
-			go worker(fp, results)
-		}
-
-		for range batch {
-			allResults.Items = append(allResults.Items, <-results)
-		}
-	}
-
-	log.Printf("Processed %d files:", len(allResults.Items))
-	for _, f := range allResults.Items {
-		if f.result == true {
-			log.Printf("OK: %s -> %s (%d)", f.file, f.target, f.bytes)
-		} else {
-			log.Printf("NOK: %s", f.file)
-		}
-	}
 }
