@@ -1,14 +1,12 @@
 package main
 
 import (
-	"crypto/md5"
-	"encoding/hex"
 	"flag"
-	"io"
+	"fmt"
 	"log"
 	"os"
 	"path/filepath"
-	"sync"
+	"time"
 )
 
 type copyResult struct {
@@ -26,58 +24,62 @@ type fileResult struct {
 	file string
 }
 
-func md5sum(filePath string) (string, error) {
-	file, err := os.Open(filePath)
-	if err != nil {
-		return "", err
-	}
-	defer file.Close()
-
-	hash := md5.New()
-	if _, err := io.Copy(hash, file); err != nil {
-		return "", err
-	}
-	return hex.EncodeToString(hash.Sum(nil)), nil
+func md5sum(filePath string) string {
+	return filePath
 }
 
-func worker(concurrency int, filename <-chan string) <-chan string {
-	log.Println("started worker")
-	var wg sync.WaitGroup
-	wg.Add(1)
-	out := make(chan string, concurrency)
-	go func() {
-		limiter := make(chan bool, concurrency)
-		for i := 0; i < concurrency; i++ {
-			limiter <- true
-		}
+func BatchFiles(values <-chan string, maxItems int, maxTimeout time.Duration) chan []string {
+	batches := make(chan []string)
 
-		for i := 0; i < concurrency; i++ {
-			<-limiter
-			path := <-filename
-			log.Println(path)
-			go md5sum(path)
-			limiter <- true
-		}
-		wg.Done()
-	}()
 	go func() {
-		wg.Wait()
-		close(out)
+		defer close(batches)
+
+		for keepGoing := true; keepGoing; {
+			var batch []string
+			expire := time.After(maxTimeout)
+			for {
+				select {
+				case value, ok := <-values:
+					if !ok {
+						fmt.Println("all done")
+						keepGoing = false
+						goto done
+					}
+
+					batch = append(batch, value)
+					if len(batch) == maxItems {
+						fmt.Println("reached batch")
+						goto done
+					}
+
+				case <-expire:
+					fmt.Println("expired")
+					keepGoing = false
+					goto done
+				}
+			}
+
+		done:
+			if len(batch) > 0 {
+				fmt.Println("done")
+				batches <- batch
+			}
+		}
 	}()
-	return out
+	fmt.Println("returning batch")
+	return batches
 }
 
 func walker(Dir string, maxJobs int) <-chan string {
-	out := make(chan string, maxJobs)
+	out := make(chan string, 1)
 	log.Println("walker")
-
 	go func() {
 		err := filepath.Walk(Dir,
 			func(path string, info os.FileInfo, err error) error {
 				if err != nil {
+					log.Println(err)
 					return err
 				}
-				log.Println(path)
 				out <- path
 				return nil
 			})
@@ -90,21 +92,30 @@ func walker(Dir string, maxJobs int) <-chan string {
 	return out
 }
 
+func process(filebatch []string, maxJobs int) {
+	limChan := make(chan bool, maxJobs)
+	for i := 0; i < maxJobs; i++ {
+		limChan <- true
+	}
+	for _, dirname := range filebatch {
+		<-limChan
+		go md5sum(dirname)
+		limChan <- true
+	}
+}
+
 func main() {
 	var (
 		maxJobs int
 		Dir     string
 	)
-
 	flag.StringVar(&Dir, "dir", "/tmp/testdir", "Directory")
 	flag.IntVar(&maxJobs, "jobs", 5, "Directory")
-
 	flag.Parse()
 
-	walker := walker(Dir, maxJobs)
-	processed := worker(maxJobs, walker)
-
-	for range processed {
+	processed := walker(Dir, maxJobs)
+	for batch := range BatchFiles(processed, maxJobs, 20*time.Millisecond) {
+		fmt.Println(batch)
+		process(batch, maxJobs)
 	}
-
 }
