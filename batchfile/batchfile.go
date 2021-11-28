@@ -123,10 +123,10 @@ func process(filebatch []string) {
 	var wg sync.WaitGroup
 	for _, dirname := range filebatch {
 		wg.Add(1)
-		go func() {
+		go func(dirname string) {
 			defer wg.Done()
 			md5sum(dirname)
-		}()
+		}(dirname)
 	}
 	wg.Wait()
 }
