@@ -1,11 +1,17 @@
 package main
 
 import (
+	"bytes"
+	"crypto/sha256"
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"path/filepath"
+	"runtime"
+	"strconv"
+	"sync"
 	"time"
 )
 
@@ -25,6 +31,15 @@ type fileResult struct {
 }
 
 func md5sum(filePath string) string {
+	input, _ := os.Open(filePath)
+	hash := sha256.New()
+	defer input.Close()
+	if _, err := io.Copy(hash, input); err != nil {
+		log.Fatal(err)
+	}
+	sum := hash.Sum(nil)
+
+	fmt.Println("md5sum", filePath, getGID(), sum)
 	return filePath
 }
 
@@ -80,6 +95,9 @@ func walker(Dir string, maxJobs int) <-chan string {
 					log.Println(err)
 					return err
 				}
+				if info.IsDir() == true {
+					return nil
+				}
 				out <- path
 				return nil
 			})
@@ -92,16 +110,25 @@ func walker(Dir string, maxJobs int) <-chan string {
 	return out
 }
 
-func process(filebatch []string, maxJobs int) {
-	limChan := make(chan bool, maxJobs)
-	for i := 0; i < maxJobs; i++ {
-		limChan <- true
-	}
+func getGID() uint64 {
+	b := make([]byte, 64)
+	b = b[:runtime.Stack(b, false)]
+	b = bytes.TrimPrefix(b, []byte("goroutine "))
+	b = b[:bytes.IndexByte(b, ' ')]
+	n, _ := strconv.ParseUint(string(b), 10, 64)
+	return n
+}
+
+func process(filebatch []string) {
+	var wg sync.WaitGroup
 	for _, dirname := range filebatch {
-		<-limChan
-		go md5sum(dirname)
-		limChan <- true
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			md5sum(dirname)
+		}()
 	}
+	wg.Wait()
 }
 
 func main() {
@@ -109,13 +136,14 @@ func main() {
 		maxJobs int
 		Dir     string
 	)
+	cores := runtime.GOMAXPROCS(0)
 	flag.StringVar(&Dir, "dir", "/tmp/testdir", "Directory")
-	flag.IntVar(&maxJobs, "jobs", 5, "Directory")
+	flag.IntVar(&maxJobs, "jobs", cores, "Directory")
 	flag.Parse()
 
 	processed := walker(Dir, maxJobs)
 	for batch := range BatchFiles(processed, maxJobs, 20*time.Millisecond) {
 		fmt.Println(batch)
-		process(batch, maxJobs)
+		process(batch)
 	}
 }
