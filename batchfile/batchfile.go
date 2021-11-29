@@ -90,6 +90,7 @@ func walker(Dir string, maxJobs int) <-chan string {
 func process(filebatch []string) chan sumResult {
 	out := make(chan sumResult, len(filebatch))
 	var wg sync.WaitGroup
+	defer close(out)
 	for _, dirname := range filebatch {
 		wg.Add(1)
 		go func(dirname string) {
@@ -98,7 +99,6 @@ func process(filebatch []string) chan sumResult {
 		}(dirname)
 	}
 	wg.Wait()
-	close(out)
 	return out
 }
 
